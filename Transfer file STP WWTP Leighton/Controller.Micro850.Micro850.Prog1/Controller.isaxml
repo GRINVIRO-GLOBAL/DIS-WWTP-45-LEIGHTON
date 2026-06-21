@@ -1,0 +1,98 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Name="Controller" ElementGuid="b7e23afa-84f3-4d14-8a81-618be63082b1" FileVersion="200.00.006" Comment="" SingleTextLine="template" DbVersion="05.50.12" LibraryType="Project" LegacyBinding="true" Password="" ReadOnly="false">
+  <FileHeader CompanyName="Rockwell Automation Canada, Ltd." ProductName="CAM ISaGRAF 5" CompanyUrl="http://www.isagraf.com" ProductVersion="0" />
+  <DefineWords>
+    <DefineWord Name="IRQ_STI2" Define="131072" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_STI3" Define="262144" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_UFR" Define="1" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII0" Define="2" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII1" Define="4" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII2" Define="8" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII3" Define="16" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_UPM0" Define="524288" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII4" Define="2048" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_UPM1" Define="1048576" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII5" Define="4096" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_STI0" Define="32768" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_STI1" Define="65536" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET1" Define="1" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET2" Define="2" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET3" Define="3" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET4" Define="4" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET5" Define="5" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET6" Define="6" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET7" Define="7" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET8" Define="8" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET9" Define="9" Comment="" Access="ReadOnly" />
+    <DefineWord Name="DSET10" Define="10" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP1" Define="1" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP2" Define="2" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP3" Define="3" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP4" Define="4" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP5" Define="5" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP6" Define="6" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP7" Define="7" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP8" Define="8" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP9" Define="9" Comment="" Access="ReadOnly" />
+    <DefineWord Name="RCP10" Define="10" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_HSC0" Define="32" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_HSC1" Define="64" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_HSC2" Define="128" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_HSC3" Define="256" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_HSC4" Define="512" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_HSC5" Define="1024" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII6" Define="8192" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_EII7" Define="16384" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_UPM2" Define="2097152" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_UPM3" Define="4194304" Comment="" Access="ReadOnly" />
+    <DefineWord Name="IRQ_UPM4" Define="8388608" Comment="" Access="ReadOnly" />
+  </DefineWords>
+  <DataTypes />
+  <Networks>
+    <Network Name="HSD" SingleTextLine="" LocalNet="true" DistributedNet="false" Comment="" UsedForBinding="true" BindingService="false" AllowWorkbenchCommunications="true">
+      <Parameters />
+      <ConnectionParameters />
+      <ResourceParameters>
+        <Parameter Name="ValidityTime" Format="Long" Default="0" Access="UserDefined" SingleTextLine="Produced Variables validity time." LocalNet="false" DistributedNet="false" />
+      </ResourceParameters>
+      <VariableParameters />
+    </Network>
+    <Network Name="ETCP" SingleTextLine="" LocalNet="false" DistributedNet="true" Comment="" UsedForBinding="true" BindingService="false" AllowWorkbenchCommunications="true">
+      <Parameters />
+      <ConnectionParameters>
+        <Parameter Name="IPAddress" Format="String" Default="" Access="UserDefined" SingleTextLine="IP address or Computer name" LocalNet="false" DistributedNet="true" />
+      </ConnectionParameters>
+      <ResourceParameters>
+        <Parameter Name="TimeOut" Format="Long" Default="10000" Access="UserDefined" SingleTextLine="Maximum allowed time (in ms) to transport a variable" LocalNet="false" DistributedNet="false" />
+      </ResourceParameters>
+      <VariableParameters />
+    </Network>
+    <Network Name="ISARSI" SingleTextLine="" LocalNet="false" DistributedNet="true" Comment="" UsedForBinding="true" BindingService="false" AllowWorkbenchCommunications="true">
+      <Parameters>
+        <Parameter Name="Port" Format="String" Default="COM1" Access="UserDefined" SingleTextLine="Workbench communication port" LocalNet="false" DistributedNet="true" />
+        <Parameter Name="BaudRate" Format="Long" Default="115200" Access="UserDefined" SingleTextLine="Data transfer baud rate" LocalNet="false" DistributedNet="true" />
+        <Parameter Name="Parity" Format="Character" Default="N" Access="UserDefined" SingleTextLine="N: None, E: Even, O: Odd" LocalNet="false" DistributedNet="true" />
+        <Parameter Name="StopBit" Format="Word" Default="1" Access="UserDefined" SingleTextLine="1 or 2 Stop bits" LocalNet="false" DistributedNet="true" />
+        <Parameter Name="HardwareFlowControl" Format="Boolean" Default="FALSE" Access="UserDefined" SingleTextLine="TRUE when using hardware flow control" LocalNet="false" DistributedNet="true" />
+      </Parameters>
+      <ConnectionParameters />
+      <ResourceParameters />
+      <VariableParameters />
+    </Network>
+    <Network Name="CIPNetwork" SingleTextLine="" LocalNet="false" DistributedNet="true" Comment="" UsedForBinding="true" BindingService="false" AllowWorkbenchCommunications="true">
+      <Parameters />
+      <ConnectionParameters>
+        <Parameter Name="CipPath" Format="String" Default="&quot;&quot;" Access="UserDefined" SingleTextLine="" LocalNet="false" DistributedNet="true" />
+      </ConnectionParameters>
+      <ResourceParameters />
+      <VariableParameters />
+    </Network>
+  </Networks>
+  <NetworkInstances>
+    <NetworkInstance NetworkName="CIPNetwork" Name="CIPNetwork1" />
+  </NetworkInstances>
+  <Targets />
+  <Configurations>
+    <Configuration Name="Micro850" ElementGuid="d8488138-737d-4f6f-8082-76c256508c0d" />
+  </Configurations>
+</Project>

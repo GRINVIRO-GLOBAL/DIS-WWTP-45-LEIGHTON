@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Resource FileVersion="200.00.006" Name="Micro850" ResourceNb="1" ElementGuid="dd805e9c-aed7-4c04-892d-9489cd5b22f0" Address="@1" Comment="" SingleTextLine="" GenDebugInfo="false" Password="" ReadOnly="false" UsePrjPassword="false" Code="TicCode">
+  <Properties Test="true" TrigCycle="false" CyTiming="0" DeErrors="true" NbStErrors="16" ExecMode="true" EmbedTable="true" TypeEmbedTable="1" EmbedSource="true" TypeEmbedSource="0" SimulationCode="false" SfcGain="8" SfcOffset="18" EmbeddedSfc="false" ReadableImage="false" RealImage="false" LocExp="true" unlab="false" AriOpe="true" BooOpe="true" BooExp="true" GloExp="true" VarCpy="true" Uncod="true" MapFile="false" DumpPou="false" DumpConfig="false" DumpNetwork="false" CompileIncrementally="true" LinkIncrementally="true" CheckArray="true" ArrStr="true" OnlineMemory="184320" OnlineMemoryVariable="2048" FunctionInternalStateEnable="true" FbdBehaviorMode="1" OnlineMaxExtraPous="20" IsDisableAccessFBLocalVar="true" EnableCVT="false" MemRetain="RETAIN" ReduceBooleanExpressionEvaluation="false" IsIndirectBitAccessValidation="true" CyUsTiming="0" OnlineMemorySfc="20" LdBranchStackTemporaryVariableCreationEnable="true" />
+  <Pous>
+    <Program Name="Prog1" ElementGuid="59d12c9e-8527-4312-b3ba-e7e2333950f0" Language="ST" CustomFbd="0" Is1499="false" />
+  </Pous>
+  <Groups />
+</Resource>

@@ -1,0 +1,958 @@
+PROGRAM Prog1
+// =========================================================================
+// INIT. INISIALISASI SETPOINT DEFAULT (HANYA DIEKSEKUSI 1X SAAT PLC START)
+// =========================================================================
+IF __SYSVA_FIRST_SCAN THEN
+
+	HMI_Mode_Auto := FALSE;
+    HMI_Start_MC_Prog := FALSE;
+	MBR_Step := 0; 
+    MC_Step := 0; 
+    STS_MC_Running := FALSE;
+	
+    // --- Setpoint Limit FT-101 (Sumpit Flow) ---
+    HMI_AIFT101_HH := 10.5;  
+    HMI_AIFT101_H  := 2.2;  
+    HMI_AIFT101_L  := 0.5;  
+    HMI_AIFT101_LL := 0.1;  
+
+    // --- Setpoint Limit FT-102 (Permeate Flow) ---
+    HMI_AIFT102_HH := 10.0;
+    HMI_AIFT102_H  := 9.8;
+    HMI_AIFT102_L  := 0.5;
+    HMI_AIFT102_LL := 0.1;  
+
+    // --- Setpoint Limit FT-103 (Backwash Flow) ---
+    HMI_AIFT103_HH := 10.0;
+    HMI_AIFT103_H  := 8.0;
+    HMI_AIFT103_L  := 2.0;
+    HMI_AIFT103_LL := 1.0;
+
+    // --- Setpoint Limit PT-101 (Pressure MBR Suction) ---
+    HMI_AIPT101_HH := 0.45;   // Overpressure (> 2.0 bar) 
+    HMI_AIPT101_H  := 0.40;   
+    HMI_AIPT101_L  := -0.1; // Vacuum Low (Peringatan Awal)
+    HMI_AIPT101_LL := -0.27; // Vacuum Low-Low (< -0.27 bar) MATIKAN TP-03
+
+    // --- Delay Timer & Deviasi Flow ---
+    HMI_Delay_PT     := T#3s;
+    HMI_Delay_NoFlow := T#30s;
+    HMI_Dev_HH       := 1.08;
+    HMI_Dev_LL       := 0.70;
+    
+    // --- TIMER SHIFT ---
+    HMI_Timer_Shift_TP01 := T#8h;
+    HMI_Timer_Shift_TP02 := T#8h;
+    HMI_Timer_Shift_TP03 := T#8h;
+    HMI_Timer_Shift_BL01 := T#8h;
+
+    // --- DEFAULT SETPOINT TIMER MBR & MC ---
+    SET_Tr_Permeate := T#480s;   
+    SET_Ts_Permeate := T#120s;   
+    SET_Tr_Backwash := T#60s;  
+
+    SET_Tr_Dosing      := T#60s; 
+    SET_Tr_Soaking     := T#60s; 
+    SET_Tr_Aeration    := T#60s; 
+    SET_Tr_MC_Backwash := T#60s; 
+
+    // --- DEFAULT SETPOINT TIMER AGITATOR (DALAM MENIT, TIPE DINT) ---
+    HMI_Set_Agt_ON  := 25; 
+    HMI_Set_Agt_OFF := 5;  
+
+    // --- SCALING PT-101 (-0.5 HINGGA 5.0) ---
+    HMI_Raw_Min   := 4000.0;    HMI_Raw_Max   := 20000.0; 
+    HMI_FT101_Min := 0.0;       HMI_FT101_Max := 40.0; 
+    HMI_FT102_Min := 0.0;       HMI_FT102_Max := 10.0; 
+    HMI_FT103_Min := 0.0;       HMI_FT103_Max := 25.0; 
+    //HMI_PT101_Min := -0.45;       HMI_PT101_Max := 0.45; 
+	HMI_PT101_Min := 0.0;       HMI_PT101_Max := 10.00;
+	
+	// Tambahkan ini di dalam IF __SYSVA_FIRST_SCAN THEN
+    SET_Delay_T1 := T#15s; // Waktu toleransi saat pompa baru nyala sebelum ngecek flow
+    SET_Delay_T2 := T#5s;  // Delay sebelum deviasi dianggap fault
+
+    // --- COMMISSIONING / INITIAL PARAMETERS UNTUK PID ---
+    HMI_Qa_CMD := 45.0;    // Contoh target 45 CMD (Cubic Meter per Day)
+    HMI_Tr_Min := 0.7;     // Time Run Permeate = 10 Menit
+    HMI_Ts_Min := 0.3;     // Time Slack Permeate = 30 detik (0.5 Menit)
+	
+	HMI_Set_MBR_Cycle := 4; // Default 1 siklus
+	
+END_IF;
+
+// TIMER LS-103 (DEBOUNCE REAL)
+TON_LS103_HH(
+    IN := (NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND NOT _IO_EM_DI_16),
+    PT := T#10s
+);
+
+TON_LS103_H(
+    IN := (NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND _IO_EM_DI_16),
+    PT := T#10s
+);
+
+
+// =========================================================================
+// 0. INPUT MAPPING & SCALING RAW (INT) TO ENGINEERING UNIT (REAL)
+// =========================================================================
+Val_FT101 := (((ANY_TO_REAL(_IO_X1_AI_00) - HMI_Raw_Min) / (HMI_Raw_Max - HMI_Raw_Min)) * (HMI_FT101_Max - HMI_FT101_Min)) + HMI_FT101_Min;
+Val_FT102 := (((ANY_TO_REAL(_IO_X1_AI_01) - HMI_Raw_Min) / (HMI_Raw_Max - HMI_Raw_Min)) * (HMI_FT102_Max - HMI_FT102_Min)) + HMI_FT102_Min;
+Val_FT103 := (((ANY_TO_REAL(_IO_X1_AI_02) - HMI_Raw_Min) / (HMI_Raw_Max - HMI_Raw_Min)) * (HMI_FT103_Max - HMI_FT103_Min)) + HMI_FT103_Min;
+Val_PT101 := (((ANY_TO_REAL(_IO_X1_AI_03) - HMI_Raw_Min) / (HMI_Raw_Max - HMI_Raw_Min)) * (HMI_PT101_Max - HMI_PT101_Min)) + HMI_PT101_Min;
+
+STS_TP01A_Fault := _IO_EM_DI_01; STS_TP01B_Fault := _IO_EM_DI_02;
+STS_TP02A_Fault := _IO_EM_DI_03; STS_TP02B_Fault := _IO_EM_DI_04;
+STS_TP03A_Fault := _IO_EM_DI_05; STS_TP03B_Fault := _IO_EM_DI_06;
+STS_TP04A_Fault := _IO_EM_DI_07; STS_BL01A_Fault := _IO_EM_DI_08;
+STS_BL01B_Fault := _IO_EM_DI_09; STS_AGT101_Fault := _IO_EM_DI_10;
+STS_DP01_Fault  := _IO_EM_DI_11;
+
+// --- FEEDBACK SENSOR VALVE ---
+STS_VES119_Opened := _IO_EM_DI_17; // Sensor saat AV-119 full BUKA
+STS_VES119_Closed := _IO_EM_DI_18; // Sensor saat AV-119 full TUTUP 
+STS_VES120_Opened := _IO_EM_DI_19; // Sensor saat AV-120 full BUKA (Sesuai pemakaian)
+
+// --- BYPASS TANGKI BACKWASH SEMENTARA ---
+DI_BWTank_H  := TRUE;  
+DI_BWTank_LL := FALSE; 
+
+E_Stop_Active := NOT _IO_EM_DI_00 OR HMI_E_Stop_Pulse;
+
+IF E_Stop_Active THEN
+    HMI_Start_MC_Prog := FALSE; MBR_Step := 0; MC_Step := 0;
+    Cmd_Auto_TP01 := FALSE; Cmd_Auto_TP02 := FALSE; Cmd_Auto_AGT101 := FALSE;
+    Cmd_Auto_TP03 := FALSE; Cmd_Auto_TP04 := FALSE; Cmd_Auto_BL01 := FALSE;
+    Cmd_Auto_VES119 := FALSE; Cmd_Auto_VES120 := FALSE;
+END_IF;
+
+// =========================================================================
+// 1. KALKULASI SETPOINT FLOW, PRESSURE & TIMER
+// =========================================================================
+Q_b := HMI_Qa_CMD / 24.0;
+IF HMI_Tr_Min > 0.0 THEN
+    Q_c := (Q_b * (HMI_Tr_Min + HMI_Ts_Min)) / HMI_Tr_Min;
+ELSE
+    Q_c := 0.0;
+END_IF;
+
+SET_Flow_Perm_HH := Q_c * HMI_Dev_HH;
+SET_Flow_Perm_LL := Q_c * HMI_Dev_LL;
+SET_Flow_BW_HH   := HMI_Qbw_SP * HMI_Dev_HH;
+SET_Flow_BW_LL   := HMI_Qbw_SP * HMI_Dev_LL;
+
+// REVISI SUCTION PT-101: Dievaluasi INSTAN saat TP-03 menyala & Grace Period T1 selesai
+Trig_PT101_LL := (TON_T1.Q AND (_IO_EM_DO_04 OR _IO_EM_DO_05) AND Val_PT101 <= HMI_AIPT101_LL); 
+Trig_PT101_L  := (TON_T1.Q AND (_IO_EM_DO_04 OR _IO_EM_DO_05) AND Val_PT101 <= HMI_AIPT101_L);
+
+// REVISI DISCHARGE PT-101 UNTUK BW: Dievaluasi INSTAN saat TP-04 menyala & Grace Period T1 selesai
+Trig_PT_BW_HH := (TON_T1.Q AND _IO_EM_DO_06 AND Val_PT101 >= HMI_AIPT101_HH); 
+Trig_PT_BW_H  := (TON_T1.Q AND _IO_EM_DO_06 AND Val_PT101 >= HMI_AIPT101_H);
+
+// --- DELAY STARTUP FLOW (GRACE PERIOD) ---
+// TON_T1 sekarang HANYA aktif 15 detik SETELAH pompa fisik (DO) benar-benar menyala!
+TON_T1(IN := ((_IO_EM_DO_04 OR _IO_EM_DO_05 OR _IO_EM_DO_06) AND NOT STS_MC_Running), PT := SET_Delay_T1);
+
+// --- MAPPING FT UNTUK ALARM NO FLOW ---
+TON_NoFlow_Permeate(IN := ((_IO_EM_DO_04 OR _IO_EM_DO_05) AND Val_FT102 <= HMI_AIFT102_LL AND NOT STS_MC_Running), PT := HMI_Delay_NoFlow);
+//TON_NoFlow_BW(IN       := (_IO_EM_DO_06 AND Val_FT103 <= HMI_AIFT103_LL AND NOT STS_MC_Running), PT := HMI_Delay_NoFlow);
+TON_NoFlow_BW(IN := (_IO_EM_DO_06 AND Val_FT103 <= HMI_AIFT103_LL), PT := HMI_Delay_NoFlow);
+
+// --- MAPPING FT UNTUK ALARM DEVIASI FLOW (Dievaluasi HANYA setelah TON_T1 selesai / Grace period lewat) ---
+TON_T2_PermHH(IN := (TON_T1.Q AND (_IO_EM_DO_04 OR _IO_EM_DO_05) AND Val_FT102 >= SET_Flow_Perm_HH), PT := SET_Delay_T2);
+TON_T2_PermLL(IN := (TON_T1.Q AND (_IO_EM_DO_04 OR _IO_EM_DO_05) AND Val_FT102 <= SET_Flow_Perm_LL), PT := SET_Delay_T2);
+
+TON_T2_BWHH(IN   := (TON_T1.Q AND _IO_EM_DO_06 AND Val_FT103 >= SET_Flow_BW_HH),   PT := SET_Delay_T2);
+TON_T2_BWLL(IN   := (TON_T1.Q AND _IO_EM_DO_06 AND Val_FT103 <= SET_Flow_BW_LL),   PT := SET_Delay_T2);
+
+// (Bagian Timer MBR dan MC dengan Interlock DO Pompa)
+// Timer hanya menghitung JIKA kontaktor fisik pompa/blower benar-benar sedang ON
+TON_Tr_Permeate(IN  := (MBR_Step = 1 AND _IO_EM_DI_19 AND NOT E_Stop_Active AND NOT STS_MC_Running AND (_IO_EM_DO_04 OR _IO_EM_DO_05)), PT := SET_Tr_Permeate);
+TON_Ts_Permeate(IN  := (MBR_Step = 2 AND NOT E_Stop_Active AND NOT STS_MC_Running), PT := SET_Ts_Permeate);
+TON_Tr_Backwash(IN  := (MBR_Step = 3 AND _IO_EM_DI_17 AND NOT E_Stop_Active AND NOT STS_MC_Running AND _IO_EM_DO_06), PT := SET_Tr_Backwash);
+
+TON_Dosing(IN       := (MC_Step = 1 AND _IO_EM_DI_17 AND NOT E_Stop_Active AND _IO_EM_DO_06), PT := SET_Tr_Dosing);
+TON_Soaking(IN      := (MC_Step = 2 AND NOT E_Stop_Active), PT := SET_Tr_Soaking);
+TON_Aeration(IN     := (MC_Step = 3 AND NOT E_Stop_Active AND (_IO_EM_DO_07 OR _IO_EM_DO_08)), PT := SET_Tr_Aeration);
+TON_MC_Backwash(IN  := (MC_Step = 4 AND NOT E_Stop_Active AND _IO_EM_DO_06), PT := SET_Tr_MC_Backwash);
+TON_MC_Stop(IN      := (MC_Step = 5 AND NOT E_Stop_Active), PT := T#3s);
+
+// (Bagian Timer MBR dan MC biarkan sama seperti aslinya)
+//TON_Tr_Permeate(IN  := (MBR_Step = 1 AND _IO_EM_DI_19 AND NOT E_Stop_Active AND NOT STS_MC_Running), PT := SET_Tr_Permeate);
+//TON_Ts_Permeate(IN  := (MBR_Step = 2 AND NOT E_Stop_Active AND NOT STS_MC_Running), PT := SET_Ts_Permeate);
+//TON_Tr_Backwash(IN  := (MBR_Step = 3 AND _IO_EM_DI_17 AND NOT E_Stop_Active AND NOT STS_MC_Running), PT := SET_Tr_Backwash);
+
+//TON_Dosing(IN       := (MC_Step = 1 AND _IO_EM_DI_17 AND NOT E_Stop_Active), PT := SET_Tr_Dosing);
+//TON_Soaking(IN      := (MC_Step = 2 AND NOT E_Stop_Active), PT := SET_Tr_Soaking);
+//TON_Aeration(IN     := (MC_Step = 3 AND NOT E_Stop_Active), PT := SET_Tr_Aeration);
+//TON_MC_Backwash(IN  := (MC_Step = 4 AND NOT E_Stop_Active), PT := SET_Tr_MC_Backwash);
+//TON_MC_Stop(IN      := (MC_Step = 5 AND NOT E_Stop_Active), PT := T#3s);
+
+TON_AGT_ON(IN := HMI_Mode_Auto AND _IO_EM_DI_13 AND NOT TON_AGT_OFF.Q, PT := ANY_TO_TIME(HMI_Set_Agt_ON * 60000));
+TON_AGT_OFF(IN := TON_AGT_ON.Q, PT := ANY_TO_TIME(HMI_Set_Agt_OFF * 60000));
+
+TON_Shift_TP01(IN := (HMI_TP01_Duty_Sel = 3 AND NOT TON_Shift_TP01.Q), PT := HMI_Timer_Shift_TP01);
+TON_Shift_TP02(IN := (HMI_TP02_Duty_Sel = 3 AND NOT TON_Shift_TP02.Q), PT := HMI_Timer_Shift_TP02);
+TON_Shift_TP03(IN := (HMI_TP03_Duty_Sel = 3 AND NOT TON_Shift_TP03.Q), PT := HMI_Timer_Shift_TP03);
+TON_Shift_BL01(IN := (HMI_BL01_Duty_Sel = 3 AND NOT TON_Shift_BL01.Q), PT := HMI_Timer_Shift_BL01);
+
+// =========================================================================
+// 2. EVALUASI GLOBAL SYSTEM ALARMS & FAULTS
+// =========================================================================
+
+Alarm_LS101_High := _IO_EM_DI_12;
+Alarm_LS101_Low  := NOT _IO_EM_DI_12;
+Alarm_LS102_High := _IO_EM_DI_13;
+Alarm_LS102_Low  := NOT _IO_EM_DI_13;
+
+//Alarm_LS103_HighHigh := (NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND NOT _IO_EM_DI_16);
+//Alarm_LS103_High     := (NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND _IO_EM_DI_16);
+//Alarm_LS103_Low      := (NOT _IO_EM_DI_14 AND _IO_EM_DI_15 AND _IO_EM_DI_16);
+//Alarm_LS103_LowLow   := (_IO_EM_DI_14 AND _IO_EM_DI_15 AND _IO_EM_DI_16);
+
+Alarm_LS103_LowLow   := (_IO_EM_DI_14 AND _IO_EM_DI_15 AND _IO_EM_DI_16);
+Alarm_LS103_Low      := (NOT _IO_EM_DI_14 AND _IO_EM_DI_15 AND _IO_EM_DI_16);
+Alarm_LS103_High     := (NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND _IO_EM_DI_16);
+Alarm_LS103_HighHigh := (NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND NOT _IO_EM_DI_16);
+
+Alarm_LS104_HighHigh := DI_Effluent_HH; 
+
+Alarm_Level_HH_DI22 := _IO_EM_DI_22;
+Alarm_Level_LL_DI22 := NOT _IO_EM_DI_22;
+
+// --- LATCHING FAULT INSTRUMENT & FLOW (DIUBAH KE METODE PENGUNCIAN) ---
+// WAJIB dilatch agar saat interlock bekerja, status alarm di HMI tidak ikut hilang seketika!
+// --- LATCHING FAULT INSTRUMENT & FLOW (DIUBAH KE METODE PENGUNCIAN INSTAN) ---
+// WAJIB dilatch agar saat interlock bekerja, status alarm di HMI tidak ikut hilang seketika!
+IF Trig_PT101_LL         THEN Fault_PT101_LL        := TRUE; END_IF; 
+IF Trig_PT_BW_HH         THEN Fault_PT_BW_HH        := TRUE; END_IF; 
+IF TON_NoFlow_Permeate.Q THEN Fault_NoFlow_Permeate := TRUE; END_IF;
+IF TON_NoFlow_BW.Q       THEN Fault_NoFlow_BW       := TRUE; END_IF;
+IF Trig_PT101_L          THEN Alarm_PT101_L         := TRUE; END_IF;
+IF Trig_PT_BW_H          THEN Alarm_PT_BW_H         := TRUE; END_IF;
+
+IF TON_T2_PermHH.Q THEN Fault_Flow_Perm_HH := TRUE; END_IF;
+IF TON_T2_PermLL.Q THEN Fault_Flow_Perm_LL := TRUE; END_IF;
+IF TON_T2_BWHH.Q   THEN Fault_Flow_BW_HH   := TRUE; END_IF;
+IF TON_T2_BWLL.Q   THEN Fault_Flow_BW_LL   := TRUE; END_IF;
+
+STS_System_Fault := STS_TP04A_Fault OR 
+                    STS_AGT101_Fault OR 
+                    STS_DP01_Fault OR
+                    (STS_BL01A_Fault AND STS_BL01B_Fault);
+
+// --- RESET KONDISI ALARM ---
+// Operator wajib menekan tombol Reset di HMI setelah masalah fisik diperbaiki.
+IF HMI_Reset_Alarm THEN
+    Fault_PT101_LL        := FALSE; 
+    Fault_PT_BW_HH        := FALSE;
+    Fault_NoFlow_Permeate := FALSE; 
+    Fault_NoFlow_BW       := FALSE;
+    Fault_Flow_Perm_HH    := FALSE; 
+    Fault_Flow_Perm_LL    := FALSE;
+    Fault_Flow_BW_HH      := FALSE; 
+    Fault_Flow_BW_LL      := FALSE;
+    Alarm_PT101_L         := FALSE; 
+    Alarm_PT_BW_H         := FALSE;
+	HMI_Mute_Buzzer := TRUE;
+	Cmd_Auto_Buzzer := FALSE;
+END_IF;
+
+
+// =========================================================================
+// 2.A LOGIKA SNOOZE BUZZER & DETEKSI ALARM BARU (PARADOX FIXED)
+// =========================================================================
+
+Current_Alarm_Count := 0; 
+
+// 1. Hitung Alarm Hardware Trip
+IF STS_System_Fault THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF (STS_TP01A_Fault AND STS_TP01B_Fault) THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF (STS_TP02A_Fault AND STS_TP02B_Fault) THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF (STS_TP03A_Fault AND STS_TP03B_Fault) THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF (STS_BL01A_Fault AND STS_BL01B_Fault) THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+
+// 2. Hitung Alarm Permeate & Instrument 
+// PENTING: Dikeluarkan dari IF (Pompa Nyala) agar Buzzer tetap bunyi meskipun pompa sudah trip/dimatikan!
+IF Fault_NoFlow_Permeate THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Fault_Flow_Perm_HH    THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Fault_Flow_Perm_LL    THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Alarm_PT101_L         THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Fault_PT101_LL        THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+
+// 3. Hitung Alarm Backwash
+IF Fault_NoFlow_BW  THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Fault_Flow_BW_HH THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Fault_Flow_BW_LL THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Alarm_PT_BW_H    THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+IF Fault_PT_BW_HH   THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+
+// 4. Hitung Alarm Level Sensor (Sumpit & Equalizing TIDAK dimasukkan ke sini)
+//IF Alarm_LS103_HighHigh THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+//IF Alarm_LS103_LowLow   THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+//IF Alarm_LS104_HighHigh THEN Current_Alarm_Count := Current_Alarm_Count + 1; END_IF;
+
+Buzzer_Trigger := (
+    Fault_PT101_LL OR
+    Fault_PT_BW_HH OR
+    Fault_NoFlow_Permeate OR
+    Fault_NoFlow_BW OR
+    Fault_Flow_Perm_HH OR
+    Fault_Flow_Perm_LL OR
+    Fault_Flow_BW_HH OR
+    Fault_Flow_BW_LL
+);
+
+// DETEKSI ALARM BARU (HANYA SEKALI)
+IF (Current_Alarm_Count > 0) AND NOT Alarm_Active_Latched THEN
+    Alarm_Active_Latched := TRUE;
+    HMI_Mute_Buzzer := FALSE;   // bunyikan
+END_IF;
+
+// RESET LATCH kalau semua alarm hilang
+IF Current_Alarm_Count = 0 THEN
+    Alarm_Active_Latched := FALSE;
+    HMI_Mute_Buzzer := FALSE;
+END_IF;
+
+Last_Alarm_Count := Current_Alarm_Count; 
+
+TON_Reminder(IN := Alarm_Active_Latched AND HMI_Mute_Buzzer, PT := T#10m);
+
+IF Alarm_Active_Latched AND (NOT HMI_Mute_Buzzer OR TON_Reminder.Q) THEN
+    Cmd_Auto_Buzzer := TRUE;
+ELSE
+    Cmd_Auto_Buzzer := FALSE;
+END_IF;
+
+// =========================================================================
+// 2.5. SELEKSI MODE (AUTO / MANUAL) - SET/RESET LOGIC
+// =========================================================================
+Trig_Auto(CLK := HMI_Btn_Set_Auto);
+Trig_Manual(CLK := HMI_Btn_Set_Manual);
+
+// --- REVISI: TRIP KE MANUAL JIKA ADA FAULT KRITIS PT-101 ---
+Trip_To_Manual := Trig_Manual.Q OR E_Stop_Active OR STS_System_Fault OR 
+                  Fault_PT101_LL OR Fault_PT_BW_HH OR 
+                  (STS_MC_Running AND MC_Step = 5 AND TON_MC_Stop.Q AND HMI_Mode_Auto);
+
+IF Trig_Auto.Q THEN
+    // Cegah masuk Auto jika status PT-101 masih bermasalah / belum direset
+    IF NOT Trip_To_Manual THEN
+        HMI_Mode_Auto := TRUE;
+    END_IF;
+END_IF;
+
+IF Trip_To_Manual THEN
+    IF HMI_Mode_Auto THEN
+        // Matikan semua aktuator / output fisik seketika
+        _IO_EM_DO_00 := FALSE; _IO_EM_DO_01 := FALSE; _IO_EM_DO_02 := FALSE; 
+        _IO_EM_DO_03 := FALSE; _IO_EM_DO_04 := FALSE; _IO_EM_DO_05 := FALSE; 
+        _IO_EM_DO_06 := FALSE; _IO_EM_DO_07 := FALSE; _IO_EM_DO_08 := FALSE; 
+        _IO_EM_DO_09 := FALSE; _IO_EM_DO_10 := FALSE; _IO_EM_DO_11 := FALSE; 
+        _IO_EM_DO_12 := FALSE;
+        _IO_X2_AO_00 := 0; _IO_X2_AO_01 := 0;
+        
+        // Reset seluruh sekuens ke 0 (Gugurkan program yang sedang berjalan)
+        MBR_Step := 0; MC_Step := 0; STS_MC_Running := FALSE;
+        HMI_Start_MC_Prog := FALSE; 
+    END_IF;
+    HMI_Mode_Auto := FALSE; 
+END_IF;
+
+TON_Auto_Blower(IN := HMI_Mode_Auto AND NOT E_Stop_Active AND NOT STS_System_Fault, PT := T#5s);
+
+// =========================================================================
+// 3. DUTY SELECTOR, AUTO-BACKUP & TIMER SHIFTING
+// =========================================================================
+HMI_TP01_Duty_Sel := 3; HMI_TP02_Duty_Sel := 3; 
+HMI_TP03_Duty_Sel := 3; HMI_BL01_Duty_Sel := 3;
+
+IF TON_Shift_TP01.Q THEN
+    IF Duty_TP01A THEN Duty_TP01A := FALSE; Duty_TP01B := TRUE;
+    ELSE               Duty_TP01A := TRUE;  Duty_TP01B := FALSE; END_IF;
+END_IF;
+
+IF HMI_TP01_Duty_Sel = 3 THEN
+    IF NOT Duty_TP01A AND NOT Duty_TP01B THEN Duty_TP01A := TRUE; END_IF;
+    IF Duty_TP01A AND STS_TP01A_Fault THEN Duty_TP01A := FALSE; Duty_TP01B := TRUE; END_IF;
+    IF Duty_TP01B AND STS_TP01B_Fault THEN Duty_TP01B := FALSE; Duty_TP01A := TRUE; END_IF;
+    IF STS_TP01A_Fault AND STS_TP01B_Fault THEN Duty_TP01A := FALSE; Duty_TP01B := FALSE; END_IF;
+ELSIF (HMI_TP01_Duty_Sel = 1 AND NOT STS_TP01A_Fault) OR (HMI_TP01_Duty_Sel = 2 AND STS_TP01B_Fault) THEN
+    Duty_TP01A := TRUE;  Duty_TP01B := FALSE;
+ELSIF (HMI_TP01_Duty_Sel = 2 AND NOT STS_TP01B_Fault) OR (HMI_TP01_Duty_Sel = 1 AND STS_TP01A_Fault) THEN
+    Duty_TP01A := FALSE; Duty_TP01B := TRUE;
+ELSE Duty_TP01A := FALSE; Duty_TP01B := FALSE; END_IF;
+
+IF TON_Shift_TP02.Q THEN
+    IF Duty_TP02A THEN Duty_TP02A := FALSE; Duty_TP02B := TRUE;
+    ELSE               Duty_TP02A := TRUE;  Duty_TP02B := FALSE; END_IF;
+END_IF;
+
+IF HMI_TP02_Duty_Sel = 3 THEN
+    IF NOT Duty_TP02A AND NOT Duty_TP02B THEN Duty_TP02A := TRUE; END_IF;
+    IF Duty_TP02A AND STS_TP02A_Fault THEN Duty_TP02A := FALSE; Duty_TP02B := TRUE; END_IF;
+    IF Duty_TP02B AND STS_TP02B_Fault THEN Duty_TP02B := FALSE; Duty_TP02A := TRUE; END_IF;
+    IF STS_TP02A_Fault AND STS_TP02B_Fault THEN Duty_TP02A := FALSE; Duty_TP02B := FALSE; END_IF;
+ELSIF (HMI_TP02_Duty_Sel = 1 AND NOT STS_TP02A_Fault) OR (HMI_TP02_Duty_Sel = 2 AND STS_TP02B_Fault) THEN
+    Duty_TP02A := TRUE;  Duty_TP02B := FALSE;
+ELSIF (HMI_TP02_Duty_Sel = 2 AND NOT STS_TP02B_Fault) OR (HMI_TP02_Duty_Sel = 1 AND STS_TP02A_Fault) THEN
+    Duty_TP02A := FALSE; Duty_TP02B := TRUE;
+ELSE Duty_TP02A := FALSE; Duty_TP02B := FALSE; END_IF;
+
+IF TON_Shift_TP03.Q THEN
+    IF Duty_TP03A THEN Duty_TP03A := FALSE; Duty_TP03B := TRUE;
+    ELSE               Duty_TP03A := TRUE;  Duty_TP03B := FALSE; END_IF;
+END_IF;
+
+IF HMI_TP03_Duty_Sel = 3 THEN
+    IF NOT Duty_TP03A AND NOT Duty_TP03B THEN Duty_TP03A := TRUE; END_IF;
+    IF Duty_TP03A AND STS_TP03A_Fault THEN Duty_TP03A := FALSE; Duty_TP03B := TRUE; END_IF;
+    IF Duty_TP03B AND STS_TP03B_Fault THEN Duty_TP03B := FALSE; Duty_TP03A := TRUE; END_IF;
+    IF STS_TP03A_Fault AND STS_TP03B_Fault THEN Duty_TP03A := FALSE; Duty_TP03B := FALSE; END_IF;
+ELSIF (HMI_TP03_Duty_Sel = 1 AND NOT STS_TP03A_Fault) OR (HMI_TP03_Duty_Sel = 2 AND STS_TP03B_Fault) THEN
+    Duty_TP03A := TRUE;  Duty_TP03B := FALSE;
+ELSIF (HMI_TP03_Duty_Sel = 2 AND NOT STS_TP03B_Fault) OR (HMI_TP03_Duty_Sel = 1 AND STS_TP03A_Fault) THEN
+    Duty_TP03A := FALSE; Duty_TP03B := TRUE;
+ELSE Duty_TP03A := FALSE; Duty_TP03B := FALSE; END_IF;
+
+IF TON_Shift_BL01.Q THEN
+    IF Duty_BL01A THEN Duty_BL01A := FALSE; Duty_BL01B := TRUE;
+    ELSE               Duty_BL01A := TRUE;  Duty_BL01B := FALSE; END_IF;
+END_IF;
+
+IF HMI_BL01_Duty_Sel = 3 THEN
+    IF NOT Duty_BL01A AND NOT Duty_BL01B THEN Duty_BL01A := TRUE; END_IF;
+    IF Duty_BL01A AND STS_BL01A_Fault THEN Duty_BL01A := FALSE; Duty_BL01B := TRUE; END_IF;
+    IF Duty_BL01B AND STS_BL01B_Fault THEN Duty_BL01B := FALSE; Duty_BL01A := TRUE; END_IF;
+    IF STS_BL01A_Fault AND STS_BL01B_Fault THEN Duty_BL01A := FALSE; Duty_BL01B := FALSE; END_IF;
+ELSIF (HMI_BL01_Duty_Sel = 1 AND NOT STS_BL01A_Fault) OR (HMI_BL01_Duty_Sel = 2 AND STS_BL01B_Fault) THEN
+    Duty_BL01A := TRUE;  Duty_BL01B := FALSE;
+ELSIF (HMI_BL01_Duty_Sel = 2 AND NOT STS_BL01B_Fault) OR (HMI_BL01_Duty_Sel = 1 AND STS_BL01A_Fault) THEN
+    Duty_BL01A := FALSE; Duty_BL01B := TRUE;
+ELSE Duty_BL01A := FALSE; Duty_BL01B := FALSE; END_IF;
+
+// =========================================================================
+// 4. SEQUENCE AUTO: SUMPIT & EQUALIZING (PCP Bab 2 & 3)
+// =========================================================================
+IF NOT E_Stop_Active THEN
+    
+    // --- LOGIKA TP-01 (Sumpit Pump) ---
+    // Nyala jika Sumpit High (DI_12) DAN Equalizing Belum High (DI_13)
+    IF _IO_EM_DI_12 = TRUE AND _IO_EM_DI_13 = FALSE AND NOT (STS_TP03A_Fault AND STS_TP03B_Fault) THEN
+        Cmd_Auto_TP01 := TRUE;
+    ELSIF _IO_EM_DI_12 = FALSE OR _IO_EM_DI_13 = TRUE OR (STS_TP03A_Fault AND STS_TP03B_Fault) THEN
+        Cmd_Auto_TP01 := FALSE;
+    END_IF;
+
+    // --- LOGIKA HISTERESIS / ANTI-CHATTERING TP-02 ---
+    // 1. Jika level mencapai High-High selama 3 detik (TON_LS103_HH.Q), KUNCI status Overfill
+    IF TON_LS103_HH.Q THEN
+        Status_Overfill_LS103 := TRUE; 
+        
+    // 2. Jika level turun di bawah High (NOT _IO_EM_DI_15), lepas kunci Overfill
+    //    Ini memastikan pompa tidak akan "beradu" antara HH dan H.
+    ELSIF NOT _IO_EM_DI_15 THEN 
+        Status_Overfill_LS103 := FALSE;
+    END_IF;
+
+    // --- EKSEKUSI CMD TP-02 (Equalizing Pump) ---
+    IF NOT STS_System_Fault AND NOT (STS_TP03A_Fault AND STS_TP03B_Fault) THEN
+        
+        // Syarat Nyala: Ada air di Equalizing (DI_13) DAN TIDAK sedang dalam kondisi Overfill HH
+        IF _IO_EM_DI_13 = TRUE AND Status_Overfill_LS103 = FALSE THEN
+            
+            // Tambahkan Delay 3 detik (H) sebelum nyala agar tidak kaget saat air bergelombang
+            IF TON_LS103_H.Q THEN
+                Cmd_Auto_TP02 := TRUE;
+            END_IF;
+            
+        ELSE
+            // Jika DI_13 hilang (Low) atau Status Overfill aktif, wajib mati
+            Cmd_Auto_TP02 := FALSE;
+        END_IF;
+
+    ELSE
+        Cmd_Auto_TP02 := FALSE;
+    END_IF;
+    
+    // --- LOGIKA AGITATOR AGT101 ---
+    IF _IO_EM_DI_13 = TRUE AND NOT STS_System_Fault THEN
+        Cmd_Auto_AGT101 := NOT TON_AGT_ON.Q;
+    ELSE
+        Cmd_Auto_AGT101 := FALSE;
+    END_IF;
+
+END_IF;
+
+// =========================================================================
+// 5. SEQUENCE AUTO: MBR FILTRATION (PCP Bab 4)
+// =========================================================================
+IF _IO_EM_DI_15 = FALSE THEN MBR_Level_OK := TRUE;  END_IF;
+IF _IO_EM_DI_14 = TRUE  THEN MBR_Level_OK := FALSE; END_IF;
+
+IF MBR_Level_OK AND NOT DI_Effluent_HH AND NOT STS_System_Fault AND NOT E_Stop_Active AND NOT (STS_TP03A_Fault AND STS_TP03B_Fault) THEN
+    IF MBR_Step = 0 THEN Cycle_Count := 0; MBR_Step := 1; END_IF;
+
+    IF STS_MC_Running THEN
+        Cmd_Auto_TP03  := FALSE; Cmd_Auto_TP04  := FALSE; 
+        Cmd_Auto_VES119 := FALSE; Cmd_Auto_VES120 := FALSE;
+    ELSE
+		CASE MBR_Step OF
+            1:  
+                IF NOT Fault_PT101_LL AND NOT _IO_EM_DI_21 THEN
+                    Cmd_Auto_TP03  := TRUE; Cmd_Auto_VES120 := TRUE;
+                ELSE
+                    Cmd_Auto_TP03  := FALSE; Cmd_Auto_VES120 := TRUE; 
+                END_IF;
+                Cmd_Auto_TP04  := FALSE; Cmd_Auto_VES119 := FALSE;
+                IF TON_Tr_Permeate.Q THEN MBR_Step := 2; END_IF;
+				
+            2:  
+                Cmd_Auto_TP03  := FALSE; Cmd_Auto_TP04  := FALSE;
+                Cmd_Auto_VES120 := TRUE; Cmd_Auto_VES119 := FALSE; 
+                IF TON_Ts_Permeate.Q THEN
+                    Cycle_Count := Cycle_Count + 1;
+                    IF Cycle_Count >= HMI_Set_MBR_Cycle THEN MBR_Step := 3; ELSE MBR_Step := 1; END_IF;
+                END_IF;
+			
+			3:  
+                Cmd_Auto_TP03  := FALSE; Cmd_Auto_VES120 := FALSE;
+                // [REVISI] Syarat Alarm High dihapus agar TP-04 tidak mati saat peringatan awal (H)
+                IF DI_BWTank_H AND NOT DI_BWTank_LL AND NOT Fault_PT_BW_HH AND NOT Fault_Flow_BW_LL AND NOT Fault_NoFlow_BW THEN
+                    Cmd_Auto_TP04  := TRUE; Cmd_Auto_VES119 := TRUE;
+                ELSE
+                    Cmd_Auto_TP04  := FALSE; Cmd_Auto_VES119 := FALSE;
+                END_IF;
+                IF TON_Tr_Backwash.Q THEN Cycle_Count := 0; MBR_Step := 1; END_IF;
+        END_CASE;
+    END_IF;
+ELSE
+    IF NOT STS_System_Fault THEN
+        MBR_Step := 0;
+        Cmd_Auto_TP03 := FALSE; Cmd_Auto_TP04 := FALSE; 
+        Cmd_Auto_VES119 := FALSE; Cmd_Auto_VES120 := FALSE;
+    END_IF;
+END_IF;
+
+// =========================================================================
+// 6. SEQUENCE MAINTENANCE CLEANING / MC (PCP Bab 5)
+// =========================================================================
+IF HMI_Start_MC_Prog AND NOT STS_System_Fault AND NOT E_Stop_Active AND _IO_EM_DI_13 = TRUE AND _IO_EM_DI_21 = TRUE THEN
+    STS_MC_Running := TRUE;
+    IF MC_Step = 0 THEN MC_Step := 1; END_IF;
+END_IF;
+
+IF NOT HMI_Start_MC_Prog OR STS_System_Fault OR E_Stop_Active OR _IO_EM_DI_13 = FALSE OR _IO_EM_DI_21 = FALSE THEN
+    HMI_Start_MC_Prog := FALSE; 
+    
+    IF E_Stop_Active OR STS_System_Fault THEN
+        STS_MC_Running := FALSE;
+        MC_Step := 0;
+    ELSIF STS_MC_Running AND MC_Step > 0 AND MC_Step < 6 THEN
+        MC_Step := 6; 
+    END_IF;
+END_IF;
+
+IF STS_MC_Running THEN
+    CASE MC_Step OF
+        1:  
+            Cmd_MC_VES119 := TRUE; 
+            Cmd_MC_TP03   := FALSE;
+            Cmd_MC_BL01   := FALSE;
+			
+			// [REVISI] Syarat Alarm High dihapus agar TP-04 tidak mati saat peringatan awal (H)
+            IF _IO_EM_DI_17 AND DI_BWTank_H AND NOT DI_BWTank_LL AND NOT Fault_PT_BW_HH AND NOT Fault_Flow_BW_LL AND NOT Fault_NoFlow_BW THEN
+                Cmd_MC_TP04 := TRUE;
+                Cmd_MC_DP01 := TRUE;
+            ELSE
+                Cmd_MC_TP04 := FALSE;
+                Cmd_MC_DP01 := FALSE;
+            END_IF;
+            IF TON_Dosing.Q THEN MC_Step := 2; END_IF;
+
+        2:  
+            Cmd_MC_VES119 := TRUE;  
+            Cmd_MC_TP04   := FALSE; 
+            Cmd_MC_DP01   := FALSE; 
+            Cmd_MC_TP03   := FALSE; 
+            Cmd_MC_BL01   := FALSE; 
+
+            IF TON_Soaking.Q THEN MC_Step := 3; END_IF;
+
+        3:  
+            Cmd_MC_VES119 := TRUE;  
+            Cmd_MC_TP04   := FALSE;
+            Cmd_MC_DP01   := FALSE;
+            Cmd_MC_TP03   := FALSE;
+            Cmd_MC_BL01   := TRUE;  
+
+            IF TON_Aeration.Q THEN MC_Step := 4; END_IF;
+
+        4:  
+            Cmd_MC_VES119 := TRUE;  
+            Cmd_MC_DP01   := FALSE;
+            Cmd_MC_TP03   := FALSE;
+            Cmd_MC_BL01   := TRUE;
+			
+			// [REVISI] Syarat Alarm High dihapus agar TP-04 tidak mati saat peringatan awal (H)
+            IF _IO_EM_DI_17 AND DI_BWTank_H AND NOT DI_BWTank_LL AND NOT Fault_PT_BW_HH AND NOT Fault_Flow_BW_LL AND NOT Fault_NoFlow_BW THEN
+                Cmd_MC_TP04 := TRUE;
+            ELSE
+                Cmd_MC_TP04 := FALSE;
+            END_IF;
+
+            IF TON_MC_Backwash.Q THEN MC_Step := 5; END_IF;
+        
+        5:  
+            Cmd_MC_TP04   := FALSE; 
+            Cmd_MC_BL01   := FALSE; 
+            Cmd_MC_DP01   := FALSE; 
+            Cmd_MC_TP03   := FALSE;
+
+            IF NOT TON_MC_Stop.Q THEN
+                Cmd_MC_VES119 := TRUE; 
+            ELSE
+                Cmd_MC_VES119 := FALSE;     
+                _IO_EM_DO_11  := FALSE;     
+                MC_Step := 6; 
+            END_IF;
+
+        6:  
+            Cmd_MC_TP04   := FALSE; 
+            Cmd_MC_BL01   := FALSE; 
+            Cmd_MC_DP01   := FALSE; 
+            Cmd_MC_TP03   := FALSE;
+            Cmd_MC_VES119 := FALSE;
+            _IO_EM_DO_11  := FALSE;
+            
+            IF STS_VES119_Closed = TRUE AND STS_VES119_Opened = FALSE THEN
+                STS_MC_Running := FALSE;    
+                MC_Step := 0;               
+                HMI_Start_MC_Prog := FALSE; 
+            END_IF;
+    END_CASE;
+ELSE
+    IF NOT STS_System_Fault THEN
+        MC_Step       := 0;
+        Cmd_MC_VES119 := FALSE; Cmd_MC_TP03 := FALSE;
+        Cmd_MC_BL01   := FALSE; Cmd_MC_TP04 := FALSE; Cmd_MC_DP01 := FALSE;
+    END_IF;
+END_IF;
+
+
+// =========================================================================
+// 7. COMMAND MASTER RESOLUTION 
+// =========================================================================
+IF STS_MC_Running THEN
+    Cmd_Master_TP03  := Cmd_MC_TP03;
+    Cmd_Master_TP04  := Cmd_MC_TP04;
+    Cmd_Master_BL01  := Cmd_MC_BL01;
+    Cmd_Master_DP01  := Cmd_MC_DP01;
+    Cmd_Master_VES119 := Cmd_MC_VES119;
+    Cmd_Master_VES120 := FALSE;  
+ELSE
+    Cmd_Master_VES120 := Cmd_Auto_VES120; 
+    
+    // --- INTERLOCK: MASTER TP-03 MATI JIKA DI_21=1, VAKUM LL, EFFLUENT HH, PT-101 HH, ATAU NO FLOW ---
+    IF _IO_EM_DI_19 AND NOT _IO_EM_DI_21 AND NOT Fault_PT101_LL AND NOT DI_Effluent_HH AND NOT Fault_PT_BW_HH AND NOT Fault_NoFlow_Permeate THEN 
+        Cmd_Master_TP03 := Cmd_Auto_TP03; 
+    ELSE
+        Cmd_Master_TP03 := FALSE;
+    END_IF;
+    
+    IF _IO_EM_DI_17 THEN 
+        Cmd_Master_TP04  := Cmd_Auto_TP04;
+    ELSE
+        Cmd_Master_TP04  := FALSE;
+    END_IF;
+
+    Cmd_Master_BL01  := TON_Auto_Blower.Q;
+    Cmd_Master_DP01  := FALSE;
+    Cmd_Master_VES119 := Cmd_Auto_VES119;
+
+    IF DI_BWTank_HH OR STS_System_Fault    THEN Cmd_Master_VES119 := FALSE; END_IF;
+    IF DI_Effluent_HH OR STS_System_Fault  THEN Cmd_Master_VES120 := FALSE; END_IF;
+END_IF;
+
+
+// =========================================================================
+// 7.5. PID CONTROL UNTUK TP-03 (VFD ANALOG OUTPUT)
+// =========================================================================
+Trig_PID(CLK := Cmd_Master_TP03);
+
+PID_TP03(
+    Enable      := Cmd_Master_TP03,
+    PV          := Val_FT102,
+    SP          := Q_c,
+    AutoManual  := TRUE,
+    CVManual    := 0.0,
+    CVMax       := 100.0,
+    CVMin       := 0.0,
+    Control     := Trig_PID.Q
+);
+
+IF Cmd_Master_TP03 THEN
+    Analog_Out_TP03_Calc := PID_TP03.CV; 
+ELSE
+    Analog_Out_TP03_Calc := 0.0;
+END_IF;
+
+// =========================================================================
+// 8. FINAL OUTPUT MAPPING KE FISIK (DO & AO)
+// =========================================================================
+AO_Raw_Calc := (((Analog_Out_TP03_Calc / 100.0) * (HMI_Raw_Max - HMI_Raw_Min)) + HMI_Raw_Min);
+AO_Raw_Calc_Man_A := (((HMI_Man_VFD_TP03A / 50.0) * (HMI_Raw_Max - HMI_Raw_Min)) + HMI_Raw_Min);
+AO_Raw_Calc_Man_B := (((HMI_Man_VFD_TP03B / 50.0) * (HMI_Raw_Max - HMI_Raw_Min)) + HMI_Raw_Min);
+
+IF E_Stop_Active OR STS_System_Fault THEN
+    _IO_EM_DO_00 := FALSE; _IO_EM_DO_01 := FALSE; _IO_EM_DO_02 := FALSE; 
+    _IO_EM_DO_03 := FALSE; _IO_EM_DO_04 := FALSE; _IO_EM_DO_05 := FALSE; 
+    _IO_EM_DO_06 := FALSE; _IO_EM_DO_07 := FALSE; _IO_EM_DO_08 := FALSE; 
+    _IO_EM_DO_09 := FALSE; _IO_EM_DO_10 := FALSE; _IO_EM_DO_11 := FALSE; 
+    _IO_EM_DO_12 := FALSE;
+    _IO_EM_DO_13 := Cmd_Auto_Buzzer; 
+    
+    _IO_X2_AO_00 := 0; 
+    _IO_X2_AO_01 := 0; 
+
+ELSIF HMI_Mode_Auto = TRUE THEN
+    _IO_EM_DO_00 := Cmd_Auto_TP01     AND Duty_TP01A;  
+    _IO_EM_DO_01 := Cmd_Auto_TP01     AND Duty_TP01B;  
+    _IO_EM_DO_02 := Cmd_Auto_TP02     AND Duty_TP02A;  
+    _IO_EM_DO_03 := Cmd_Auto_TP02     AND Duty_TP02B;  
+    _IO_EM_DO_04 := Cmd_Master_TP03   AND Duty_TP03A;  
+    _IO_EM_DO_05 := Cmd_Master_TP03   AND Duty_TP03B;  
+    _IO_EM_DO_06 := Cmd_Master_TP04;                   
+    _IO_EM_DO_07 := Cmd_Master_BL01   AND Duty_BL01A;  
+    _IO_EM_DO_08 := Cmd_Master_BL01   AND Duty_BL01B;  
+    _IO_EM_DO_09 := Cmd_Auto_AGT101;                   
+    _IO_EM_DO_10 := Cmd_Master_DP01;                   
+    _IO_EM_DO_11 := Cmd_Master_VES119;                 
+    _IO_EM_DO_12 := Cmd_Master_VES120;                 
+    _IO_EM_DO_13 := Cmd_Auto_Buzzer;
+
+    IF Cmd_Master_TP03 AND Duty_TP03A THEN
+        _IO_X2_AO_00 := ANY_TO_INT(AO_Raw_Calc);  
+        _IO_X2_AO_01 := 0;                       
+    ELSIF Cmd_Master_TP03 AND Duty_TP03B THEN
+        _IO_X2_AO_00 := 0;                       
+        _IO_X2_AO_01 := ANY_TO_INT(AO_Raw_Calc);  
+    ELSE
+        _IO_X2_AO_00 := 0;
+        _IO_X2_AO_01 := 0;
+    END_IF;
+
+ELSE
+    // --- MODE MANUAL ---
+    IF STS_TP01A_Fault THEN _IO_EM_DO_00 := FALSE; END_IF;
+    IF STS_TP01B_Fault THEN _IO_EM_DO_01 := FALSE; END_IF;
+    IF STS_TP02A_Fault THEN _IO_EM_DO_02 := FALSE; END_IF;
+    IF STS_TP02B_Fault THEN _IO_EM_DO_03 := FALSE; END_IF;
+    IF STS_TP04A_Fault THEN _IO_EM_DO_06 := FALSE; END_IF;
+    IF STS_BL01A_Fault THEN _IO_EM_DO_07 := FALSE; END_IF;
+    IF STS_BL01B_Fault THEN _IO_EM_DO_08 := FALSE; END_IF;
+    IF STS_AGT101_Fault THEN _IO_EM_DO_09 := FALSE; END_IF;
+    IF STS_DP01_Fault  THEN _IO_EM_DO_10 := FALSE; END_IF;
+
+    // --- HARD INTERLOCK MANUAL: MATIKAN TP-03 ---
+    IF _IO_EM_DI_21 OR Fault_PT101_LL OR Fault_PT_BW_HH OR DI_Effluent_HH OR Fault_NoFlow_Permeate THEN
+        _IO_EM_DO_04 := FALSE;
+        _IO_EM_DO_05 := FALSE;
+    END_IF;
+
+    // --- HARD INTERLOCK MANUAL: MATIKAN TP-04 ---
+    IF Fault_PT_BW_HH OR Fault_Flow_BW_LL OR Fault_NoFlow_BW THEN
+        _IO_EM_DO_06 := FALSE;
+    END_IF;
+
+    // --- HARD INTERLOCK MANUAL: MATIKAN DP-01 ---
+    IF Fault_PT_BW_HH THEN
+        _IO_EM_DO_10 := FALSE;
+    END_IF;
+
+    // =========================================================================
+    // --- PERBAIKAN LOGIKA POP-UP MENGGUNAKAN R_TRIG ---
+    // Eksekusi R_TRIG untuk menangkap momen tombol HMI ditekan (0 ke 1)
+    // =========================================================================
+    Trig_Manual_TP04(CLK := _IO_EM_DO_06);
+    Trig_Manual_TP03A(CLK := _IO_EM_DO_04);
+    Trig_Manual_TP03B(CLK := _IO_EM_DO_05);
+
+    // --- LOGIKA POP-UP & INTERLOCK TP-04 ---
+    // 1. LATCH POP-UP: Munculkan Pop-up HANYA saat momen tombol ditekan, tapi valve belum buka
+    IF Trig_Manual_TP04.Q AND NOT STS_VES119_Opened AND NOT STS_MC_Running THEN
+        HMI_Popup_Err_TP04 := TRUE;
+    END_IF;
+    
+    // 2. INTERLOCK FISIK: Matikan Output Pompa secara paksa dan kontinyu
+    IF _IO_EM_DO_06 AND NOT STS_VES119_Opened AND NOT STS_MC_Running THEN
+        _IO_EM_DO_06 := FALSE;         
+    END_IF;
+
+    // 3. TIMER RESET: Matikan Pop-up otomatis setelah 3 detik
+    TON_Err_TP04(IN := HMI_Popup_Err_TP04, PT := T#3s);
+    IF TON_Err_TP04.Q THEN
+        HMI_Popup_Err_TP04 := FALSE;
+    END_IF;
+
+
+    // --- LOGIKA POP-UP & INTERLOCK TP-03 ---
+    // 1. LATCH POP-UP: Munculkan Pop-up HANYA saat momen A/B ditekan, tapi valve belum buka
+    IF (Trig_Manual_TP03A.Q OR Trig_Manual_TP03B.Q) AND NOT STS_VES120_Opened AND NOT STS_MC_Running THEN
+        HMI_Popup_Err_TP03 := TRUE;
+    END_IF;
+
+    // 2. INTERLOCK FISIK: Matikan Output Pompa secara paksa dan kontinyu
+    IF (_IO_EM_DO_04 OR _IO_EM_DO_05) AND NOT STS_VES120_Opened AND NOT STS_MC_Running THEN
+        _IO_EM_DO_04 := FALSE;         
+        _IO_EM_DO_05 := FALSE;         
+    END_IF;
+
+    // 3. TIMER RESET: Matikan Pop-up otomatis setelah 3 detik
+    TON_Err_TP03(IN := HMI_Popup_Err_TP03, PT := T#3s);
+    IF TON_Err_TP03.Q THEN
+        HMI_Popup_Err_TP03 := FALSE;
+    END_IF;
+    // =========================================================================
+
+
+    _IO_EM_DO_13 := Cmd_Auto_Buzzer;
+
+    // Trigger untuk VFD Pop-up
+    Trig_TP03A(CLK := _IO_EM_DO_04); 
+    IF Trig_TP03A.Q THEN HMI_Show_VFD_A := TRUE; END_IF;
+    IF HMI_Btn_Close_A THEN HMI_Show_VFD_A := FALSE; HMI_Btn_Close_A := FALSE; END_IF;
+    IF NOT _IO_EM_DO_04 THEN HMI_Show_VFD_A := FALSE; END_IF;
+
+    Trig_TP03B(CLK := _IO_EM_DO_05); 
+    IF Trig_TP03B.Q THEN HMI_Show_VFD_B := TRUE; END_IF;
+    IF HMI_Btn_Close_B THEN HMI_Show_VFD_B := FALSE; HMI_Btn_Close_B := FALSE; END_IF;
+    IF NOT _IO_EM_DO_05 THEN HMI_Show_VFD_B := FALSE; END_IF;
+
+    IF STS_MC_Running THEN
+        _IO_EM_DO_06 := Cmd_Master_TP04;
+        _IO_EM_DO_07 := Cmd_Master_BL01 AND Duty_BL01A;
+        _IO_EM_DO_08 := Cmd_Master_BL01 AND Duty_BL01B;
+        _IO_EM_DO_10 := Cmd_Master_DP01;
+        _IO_EM_DO_11 := Cmd_Master_VES119;
+    END_IF;
+
+    IF _IO_EM_DO_04 AND NOT STS_TP03A_Fault AND NOT STS_MC_Running THEN
+        _IO_X2_AO_00 := ANY_TO_INT(AO_Raw_Calc_Man_A); 
+    ELSE
+        _IO_EM_DO_04 := FALSE; _IO_X2_AO_00 := 0;
+    END_IF;
+
+    IF _IO_EM_DO_05 AND NOT STS_TP03B_Fault AND NOT STS_MC_Running THEN
+        _IO_X2_AO_01 := ANY_TO_INT(AO_Raw_Calc_Man_B); 
+    ELSE
+        _IO_EM_DO_05 := FALSE; _IO_X2_AO_01 := 0;
+    END_IF;
+
+END_IF;
+
+// =========================================================================
+// 9. EKSTRAK ACTUAL TIMER UNTUK HMI (Read Only)
+// =========================================================================
+HMI_Act_Shift_TP01 := ANY_TO_DINT(TON_Shift_TP01.ET) / 3600000; 
+HMI_Act_Shift_TP02 := ANY_TO_DINT(TON_Shift_TP02.ET) / 3600000;
+HMI_Act_Shift_TP03 := ANY_TO_DINT(TON_Shift_TP03.ET) / 3600000;
+HMI_Act_Shift_BL01 := ANY_TO_DINT(TON_Shift_BL01.ET) / 3600000;
+
+HMI_Act_Permeate  := ANY_TO_DINT(TON_Tr_Permeate.ET) / 1000;
+HMI_Act_Slack     := ANY_TO_DINT(TON_Ts_Permeate.ET) / 1000;
+HMI_Act_Backwash  := ANY_TO_DINT(TON_Tr_Backwash.ET) / 1000;
+
+HMI_Act_Dosing      := ANY_TO_DINT(TON_Dosing.ET) / 1000;
+HMI_Act_Soaking     := ANY_TO_DINT(TON_Soaking.ET) / 1000;
+HMI_Act_Aeration    := ANY_TO_DINT(TON_Aeration.ET) / 1000;
+HMI_Act_MC_Backwash := ANY_TO_DINT(TON_MC_Backwash.ET) / 1000;
+
+HMI_Act_Agt_ON  := ANY_TO_DINT(TON_AGT_ON.ET) / 60000;
+HMI_Act_Agt_OFF := ANY_TO_DINT(TON_AGT_OFF.ET) / 60000;
+
+
+// =========================================================================
+// 10. HMI DISPLAY STATUS: TANGKI & LEVEL SENSOR (VERSI STRING)
+// =========================================================================
+IF _IO_EM_DI_12 THEN HMI_Status_LS101 := 'HIGH'; ELSE HMI_Status_LS101 := 'LOW'; END_IF;
+IF _IO_EM_DI_13 THEN HMI_Status_LS102 := 'HIGH'; ELSE HMI_Status_LS102 := 'LOW'; END_IF;
+
+IF _IO_EM_DI_14 AND _IO_EM_DI_15 AND _IO_EM_DI_16 THEN 
+    HMI_Status_LS103 := 'LOW LOW';       
+ELSIF NOT _IO_EM_DI_14 AND _IO_EM_DI_15 AND _IO_EM_DI_16 THEN 
+    HMI_Status_LS103 := 'LOW';           
+ELSIF NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND _IO_EM_DI_16 THEN 
+    HMI_Status_LS103 := 'HIGH';          
+ELSIF NOT _IO_EM_DI_14 AND NOT _IO_EM_DI_15 AND NOT _IO_EM_DI_16 THEN 
+    HMI_Status_LS103 := 'HIGH HIGH';     
+ELSE 
+    HMI_Status_LS103 := 'SENSOR ERROR!'; 
+END_IF;
+
+// --- DISPLAY LS-104 (Effluent Tank) ---
+IF DI_Effluent_HH THEN
+    HMI_Status_LS104 := 'HIGH';
+ELSE
+    HMI_Status_LS104 := 'LOW';
+END_IF;
+
+// =========================================================================
+// 11. FLOWMETER TOTALIZER (REVISI ACCUMULATOR BUFFER)
+// =========================================================================
+TON_1s_Totalizer(IN := NOT Pulse_1s, PT := T#1s);
+Pulse_1s := TON_1s_Totalizer.Q;
+
+IF Pulse_1s THEN
+    
+    // --- FT-101 (Sumpit Flow) ---
+    IF Val_FT101 > 0.1 THEN 
+        Buffer_FT101 := Buffer_FT101 + (Val_FT101 / 3600.0);
+        IF Buffer_FT101 >= 0.01 THEN
+            HMI_Total_FT101 := HMI_Total_FT101 + 0.01;
+            Buffer_FT101 := Buffer_FT101 - 0.01; 
+        END_IF;
+    END_IF;
+
+    // --- FT-102 (Permeate Flow) ---
+    IF Val_FT102 > 0.1 THEN
+        Buffer_FT102 := Buffer_FT102 + (Val_FT102 / 3600.0);
+        IF Buffer_FT102 >= 0.01 THEN
+            HMI_Total_FT102 := HMI_Total_FT102 + 0.01;
+            Buffer_FT102 := Buffer_FT102 - 0.01;
+        END_IF;
+    END_IF;
+
+    // --- FT-103 (Backwash Flow) ---
+    IF Val_FT103 > 0.1 THEN
+        Buffer_FT103 := Buffer_FT103 + (Val_FT103 / 3600.0);
+        IF Buffer_FT103 >= 0.01 THEN
+            HMI_Total_FT103 := HMI_Total_FT103 + 0.01;
+            Buffer_FT103 := Buffer_FT103 - 0.01;
+        END_IF;
+    END_IF;
+
+END_IF;
+
+// =========================================================================
+// 12. RESET TOTALIZER DARI HMI (KEMBALI KE NOL)
+// =========================================================================
+IF HMI_Btn_Reset_Total101 THEN
+    HMI_Total_FT101 := 0.0;
+    Buffer_FT101 := 0.0;
+    HMI_Btn_Reset_Total101 := FALSE; 
+END_IF;
+
+IF HMI_Btn_Reset_Total102 THEN
+    HMI_Total_FT102 := 0.0;
+    Buffer_FT102 := 0.0;
+    HMI_Btn_Reset_Total102 := FALSE;
+END_IF;
+
+IF HMI_Btn_Reset_Total103 THEN
+    HMI_Total_FT103 := 0.0;
+    Buffer_FT103 := 0.0;
+    HMI_Btn_Reset_Total103 := FALSE;
+END_IF;
+END_PROGRAM
